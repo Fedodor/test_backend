@@ -2,8 +2,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import Avg, Count
 from rest_framework import serializers
 
-from courses.models import Course, Group, Lesson
-from users.models import Subscription
+from courses.models import Course, Group, Lesson, UserCourse
+from users.models import CustomUser
 
 User = get_user_model()
 
@@ -49,10 +49,14 @@ class StudentSerializer(serializers.ModelSerializer):
 class GroupSerializer(serializers.ModelSerializer):
     """Список групп."""
 
-    # TODO Доп. задание
+    course = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = Group
+        fields = (
+            'group_number',
+            'course',
+        )
 
 
 class CreateGroupSerializer(serializers.ModelSerializer):
@@ -61,7 +65,7 @@ class CreateGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = (
-            'title',
+            'group_number',
             'course',
         )
 
@@ -87,19 +91,33 @@ class CourseSerializer(serializers.ModelSerializer):
 
     def get_lessons_count(self, obj):
         """Количество уроков в курсе."""
-        # TODO Доп. задание
+
+        return Lesson.objects.filter(course=obj).count()
 
     def get_students_count(self, obj):
         """Общее количество студентов на курсе."""
-        # TODO Доп. задание
+
+        return UserCourse.objects.filter(course=obj, has_access=True).count()
 
     def get_groups_filled_percent(self, obj):
         """Процент заполнения групп, если в группе максимум 30 чел.."""
-        # TODO Доп. задание
+        groups = obj.groups.all()
+        if not groups.exists():
+            return 0
+        avg = groups.annotate(
+            filled=Count('students')
+        ).aggregate(Avg('filled'))['filled__avg']
+        return (avg / 30) * 100 if avg else 0
 
     def get_demand_course_percent(self, obj):
         """Процент приобретения курса."""
-        # TODO Доп. задание
+
+        total_users = CustomUser.objects.all().exclude(is_staff=True).count()
+        accessed_users = UserCourse.objects.filter(
+            course=obj, has_access=True
+        ).count()
+
+        return (accessed_users / total_users) * 100
 
     class Meta:
         model = Course
@@ -122,3 +140,29 @@ class CreateCourseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Course
+        fields = (
+            'author',
+            'title',
+            'start_date',
+            'price',
+            'is_available',
+        )
+
+
+class PayCourseSerializer(serializers.Serializer):
+    """Покупка курса."""
+
+    course_id = serializers.IntegerField()
+
+    def validate_course_id(self, value):
+        """Проверка наличия курса."""
+
+        try:
+            course = Course.objects.get(id=value)
+        except Course.DoesNotExist:
+            raise serializers.ValidationError('Курс не найден')
+
+        if not course.is_available:
+            raise serializers.ValidationError('Курс недоступен')
+
+        return value
